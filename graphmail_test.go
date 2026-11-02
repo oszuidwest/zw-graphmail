@@ -148,16 +148,24 @@ func TestSecretExpiry(t *testing.T) {
 	}
 }
 
-func TestNewRequiresEveryField(t *testing.T) {
+func TestNewRequiresCredentials(t *testing.T) {
 	for i, cfg := range []Config{
-		{TenantID: "t", ClientID: "c", ClientSecret: "s", From: "f"},
-		{ClientID: "c", ClientSecret: "s", From: "f"},
-		{TenantID: "t", ClientSecret: "s", From: "f"},
-		{TenantID: "t", ClientID: "c", From: "f"},
 		{TenantID: "t", ClientID: "c", ClientSecret: "s"},
+		{ClientID: "c", ClientSecret: "s"},
+		{TenantID: "t", ClientSecret: "s"},
+		{TenantID: "t", ClientID: "c"},
 	} {
 		if _, err := New(cfg); (err == nil) != (i == 0) {
 			t.Errorf("New(%+v) error = %v", cfg, err)
 		}
+	}
+}
+
+func TestSendRequiresFrom(t *testing.T) {
+	f := &fakeGraph{handlers: []http.HandlerFunc{status(202, "")}}
+	c := f.client(t)
+	c.cfg.From = ""
+	if err := c.Send(t.Context(), &Message{To: []string{"a@x.nl"}}); err == nil || f.tokens+f.posts != 0 {
+		t.Errorf("err=%v tokens=%d posts=%d, want an error without requests", err, f.tokens, f.posts)
 	}
 }

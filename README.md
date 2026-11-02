@@ -31,7 +31,7 @@ Set `HTML: true` for an HTML body. `Attachments` takes files as bytes. Graph onl
 
 ## Permissions
 
-The app registration needs the `Mail.Send` application permission for the `From` mailbox. `SecretExpiry` also needs `Application.Read.All`. Both need admin consent.
+The app registration needs the `Mail.Send` application permission for the `From` mailbox. Only `Send` needs `From`. `SecretExpiry` also needs `Application.Read.All`. Both need admin consent.
 
 ## Behaviour
 

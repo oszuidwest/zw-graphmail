@@ -30,8 +30,8 @@ type Config struct {
 	TenantID     string
 	ClientID     string
 	ClientSecret string
-	// From is the user or shared mailbox the app sends as. The app needs the
-	// Mail.Send application permission.
+	// From is the user or shared mailbox the app sends as. Only Send needs
+	// it, and the app needs the Mail.Send application permission for it.
 	From string
 }
 
@@ -66,8 +66,8 @@ func New(cfg Config) (*Client, error) {
 }
 
 func newClient(cfg Config, tokenURL, baseURL string) (*Client, error) {
-	if cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.From == "" {
-		return nil, errors.New("graphmail: tenant ID, client ID, client secret and from address are required")
+	if cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
+		return nil, errors.New("graphmail: tenant ID, client ID and client secret are required")
 	}
 	creds := clientcredentials.Config{
 		ClientID:     cfg.ClientID,
@@ -93,6 +93,9 @@ func (c *Client) Send(ctx context.Context, m *Message) error {
 	// The token request does not follow ctx, so stop before it starts.
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("graphmail: %w", err)
+	}
+	if c.cfg.From == "" {
+		return errors.New("graphmail: from address is required to send")
 	}
 	payload, _ := json.Marshal(newMailRequest(m)) // only strings, maps and slices
 	endpoint := c.baseURL + "/users/" + url.PathEscape(c.cfg.From) + "/sendMail"
