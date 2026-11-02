@@ -3,6 +3,7 @@ package graphmail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 // the next handler; the last handler repeats.
 type fakeGraph struct {
 	handlers []http.HandlerFunc
+	tokens   int
 	posts    int
 	slept    []time.Duration
 }
@@ -23,6 +25,7 @@ func (f *fakeGraph) client(t *testing.T) *Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/token" {
+			f.tokens++
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)
 			return
@@ -92,8 +95,7 @@ func TestSendRetries(t *testing.T) {
 		"Retry-After on 503":   {handlers: []http.HandlerFunc{status(503, "3"), status(202, "")}, posts: 2, slept: []time.Duration{3 * time.Second}},
 		"network error":        {handlers: []http.HandlerFunc{dropConnection, status(202, "")}, posts: 2, slept: []time.Duration{time.Second}},
 		"backoff then give up": {handlers: []http.HandlerFunc{status(500, "")}, posts: 4, slept: []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, fails: true},
-		"Retry-After of 30s":   {handlers: []http.HandlerFunc{status(429, "30"), status(202, "")}, posts: 2, slept: []time.Duration{30 * time.Second}},
-		"Retry-After over 30s": {handlers: []http.HandlerFunc{status(429, "31")}, posts: 1, fails: true},
+		"long Retry-After":     {handlers: []http.HandlerFunc{status(429, "120"), status(202, "")}, posts: 2, slept: []time.Duration{2 * time.Minute}},
 		"client error":         {handlers: []http.HandlerFunc{status(400, "")}, posts: 1, fails: true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -106,12 +108,23 @@ func TestSendRetries(t *testing.T) {
 	}
 }
 
+func TestSendCancelledDuringWait(t *testing.T) {
+	f := &fakeGraph{handlers: []http.HandlerFunc{status(429, "30")}}
+	c := f.client(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	c.sleep = func(ctx context.Context, d time.Duration) error { cancel(); return sleep(ctx, d) }
+	start := time.Now()
+	if err := c.Send(ctx, &Message{To: []string{"a@x.nl"}}); !errors.Is(err, context.Canceled) || time.Since(start) > 10*time.Second {
+		t.Errorf("err=%v after %v, want context.Canceled without waiting 30s", err, time.Since(start))
+	}
+}
+
 func TestSendCancelled(t *testing.T) {
 	f := &fakeGraph{handlers: []http.HandlerFunc{status(202, "")}}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := f.client(t).Send(ctx, &Message{To: []string{"a@x.nl"}}); err == nil || f.posts != 0 || len(f.slept) != 0 {
-		t.Errorf("err=%v posts=%d slept=%v, want an error without attempts", err, f.posts, f.slept)
+	if err := f.client(t).Send(ctx, &Message{To: []string{"a@x.nl"}}); err == nil || f.tokens+f.posts != 0 || len(f.slept) != 0 {
+		t.Errorf("err=%v tokens=%d posts=%d slept=%v, want an error without requests", err, f.tokens, f.posts, f.slept)
 	}
 }
 
@@ -147,16 +160,24 @@ func TestSecretExpiry(t *testing.T) {
 	}
 }
 
-func TestNewRequiresEveryField(t *testing.T) {
+func TestNewRequiresCredentials(t *testing.T) {
 	for i, cfg := range []Config{
-		{TenantID: "t", ClientID: "c", ClientSecret: "s", From: "f"},
-		{ClientID: "c", ClientSecret: "s", From: "f"},
-		{TenantID: "t", ClientSecret: "s", From: "f"},
-		{TenantID: "t", ClientID: "c", From: "f"},
 		{TenantID: "t", ClientID: "c", ClientSecret: "s"},
+		{ClientID: "c", ClientSecret: "s"},
+		{TenantID: "t", ClientSecret: "s"},
+		{TenantID: "t", ClientID: "c"},
 	} {
 		if _, err := New(cfg); (err == nil) != (i == 0) {
 			t.Errorf("New(%+v) error = %v", cfg, err)
 		}
+	}
+}
+
+func TestSendRequiresFrom(t *testing.T) {
+	f := &fakeGraph{handlers: []http.HandlerFunc{status(202, "")}}
+	c := f.client(t)
+	c.cfg.From = ""
+	if err := c.Send(t.Context(), &Message{To: []string{"a@x.nl"}}); err == nil || f.tokens+f.posts != 0 {
+		t.Errorf("err=%v tokens=%d posts=%d, want an error without requests", err, f.tokens, f.posts)
 	}
 }

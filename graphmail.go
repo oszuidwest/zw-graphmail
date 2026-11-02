@@ -23,7 +23,6 @@ import (
 const (
 	graphURL    = "https://graph.microsoft.com/v1.0"
 	maxAttempts = 4
-	maxWait     = 30 * time.Second
 )
 
 // Config identifies the Entra app and the mailbox it sends from.
@@ -31,8 +30,8 @@ type Config struct {
 	TenantID     string
 	ClientID     string
 	ClientSecret string
-	// From is the user or shared mailbox the app sends as. The app needs the
-	// Mail.Send application permission.
+	// From is the user or shared mailbox the app sends as. Only Send needs
+	// it, and the app needs the Mail.Send application permission for it.
 	From string
 }
 
@@ -66,9 +65,10 @@ func New(cfg Config) (*Client, error) {
 	return newClient(cfg, tokenURL, graphURL)
 }
 
+// newClient is New with the endpoints as parameters, so tests can use a fake server.
 func newClient(cfg Config, tokenURL, baseURL string) (*Client, error) {
-	if cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.From == "" {
-		return nil, errors.New("graphmail: tenant ID, client ID, client secret and from address are required")
+	if cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
+		return nil, errors.New("graphmail: tenant ID, client ID and client secret are required")
 	}
 	creds := clientcredentials.Config{
 		ClientID:     cfg.ClientID,
@@ -87,15 +87,22 @@ func newClient(cfg Config, tokenURL, baseURL string) (*Client, error) {
 }
 
 // Send delivers m. It makes up to four attempts on 429, 500, 502, 503, 504
-// and network errors, and gives up when Graph asks to wait longer than 30
-// seconds. A retry after a lost response can deliver the mail twice, so
-// this favours delivery over avoiding duplicates.
+// and network errors. It waits as long as Graph asks in Retry-After; use a
+// context deadline to limit that. A retry after a lost response can deliver
+// the mail twice, so this favours delivery over avoiding duplicates.
 func (c *Client) Send(ctx context.Context, m *Message) error {
+	// The token request does not follow ctx, so stop before it starts.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("graphmail: %w", err)
+	}
+	if c.cfg.From == "" {
+		return errors.New("graphmail: from address is required to send")
+	}
 	payload, _ := json.Marshal(newMailRequest(m)) // only strings, maps and slices
 	endpoint := c.baseURL + "/users/" + url.PathEscape(c.cfg.From) + "/sendMail"
 	for attempt := 1; ; attempt++ {
 		retry, wait, err := c.post(ctx, endpoint, payload)
-		if !retry || attempt == maxAttempts || wait > maxWait {
+		if !retry || attempt == maxAttempts {
 			return err
 		}
 		if wait == 0 {
