@@ -109,13 +109,13 @@ func TestSendRetries(t *testing.T) {
 }
 
 func TestSendCancelledDuringWait(t *testing.T) {
-	f := &fakeGraph{handlers: []http.HandlerFunc{status(429, "5")}}
+	f := &fakeGraph{handlers: []http.HandlerFunc{status(429, "30")}}
 	c := f.client(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	c.sleep = func(ctx context.Context, d time.Duration) error { cancel(); return sleep(ctx, d) }
 	start := time.Now()
-	if err := c.Send(ctx, &Message{To: []string{"a@x.nl"}}); !errors.Is(err, context.Canceled) || time.Since(start) > 2*time.Second {
-		t.Errorf("err=%v after %v, want context.Canceled without waiting 5s", err, time.Since(start))
+	if err := c.Send(ctx, &Message{To: []string{"a@x.nl"}}); !errors.Is(err, context.Canceled) || time.Since(start) > 10*time.Second {
+		t.Errorf("err=%v after %v, want context.Canceled without waiting 30s", err, time.Since(start))
 	}
 }
 

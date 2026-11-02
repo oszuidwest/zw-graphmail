@@ -65,6 +65,7 @@ func New(cfg Config) (*Client, error) {
 	return newClient(cfg, tokenURL, graphURL)
 }
 
+// newClient is New with the endpoints as parameters, so tests can use a fake server.
 func newClient(cfg Config, tokenURL, baseURL string) (*Client, error) {
 	if cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
 		return nil, errors.New("graphmail: tenant ID, client ID and client secret are required")
