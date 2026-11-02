@@ -27,7 +27,7 @@ err = mail.Send(ctx, &graphmail.Message{
 
 Set `HTML: true` for an HTML body. `Attachments` takes files as bytes.
 
-`SecretExpiry` returns when the configured client secret expires, so a service can warn before mail stops working. See below for how it finds that secret.
+`SecretExpiry` returns when the configured client secret expires, so a service can warn before mail stops working. Graph only lets it match the secret on its first three characters; see below.
 
 ## Permissions
 
@@ -35,7 +35,7 @@ The app registration needs the `Mail.Send` application permission for the `From`
 
 ## Behaviour
 
-`Send` makes up to four attempts on 429, 500, 502, 503, 504 and network errors, including failed token requests. Between attempts it waits the number of seconds in `Retry-After`, or 1, 2 and 4 seconds when there is none. It stops when Graph asks to wait longer than 30 seconds. A retry after a lost response can deliver a mail twice, so this favours delivery over avoiding duplicates.
+`Send` makes up to four attempts on 429, 500, 502, 503, 504 and network errors, including failed token requests. Between attempts it waits the number of seconds in `Retry-After` when Graph sends a positive whole number, and otherwise 1, 2 and 4 seconds. It stops when Graph asks to wait longer than 30 seconds. A retry after a lost response can deliver a mail twice, so this favours delivery over avoiding duplicates.
 
 HTTP requests time out after 30 seconds. Token requests do not follow the context of `Send`, so a cancelled send can still wait for a token request to finish.
 
