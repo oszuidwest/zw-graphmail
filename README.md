@@ -35,7 +35,7 @@ The app registration needs the `Mail.Send` application permission for the `From`
 
 ## Behaviour
 
-`Send` makes up to four attempts on 429, 500, 502, 503, 504 and network errors, including failed token requests. Between attempts it waits the number of seconds in `Retry-After` when Graph sends a positive whole number, and otherwise 1, 2 and 4 seconds. It stops when Graph asks to wait longer than 30 seconds. A retry after a lost response can deliver a mail twice, so this favours delivery over avoiding duplicates.
+`Send` makes up to four attempts on 429, 500, 502, 503, 504 and network errors, including failed token requests. Between attempts it waits the number of seconds in `Retry-After` when Graph sends a positive whole number, and otherwise 1, 2 and 4 seconds. Long waits are not cut short, so give `Send` a context with a deadline if it must not block that long. A retry after a lost response can deliver a mail twice, so this favours delivery over avoiding duplicates.
 
 HTTP requests time out after 30 seconds. Token requests do not follow the context of `Send`, so a cancelled send can still wait for a token request to finish.
 

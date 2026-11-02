@@ -92,8 +92,7 @@ func TestSendRetries(t *testing.T) {
 		"Retry-After on 503":   {handlers: []http.HandlerFunc{status(503, "3"), status(202, "")}, posts: 2, slept: []time.Duration{3 * time.Second}},
 		"network error":        {handlers: []http.HandlerFunc{dropConnection, status(202, "")}, posts: 2, slept: []time.Duration{time.Second}},
 		"backoff then give up": {handlers: []http.HandlerFunc{status(500, "")}, posts: 4, slept: []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, fails: true},
-		"Retry-After of 30s":   {handlers: []http.HandlerFunc{status(429, "30"), status(202, "")}, posts: 2, slept: []time.Duration{30 * time.Second}},
-		"Retry-After over 30s": {handlers: []http.HandlerFunc{status(429, "31")}, posts: 1, fails: true},
+		"long Retry-After":     {handlers: []http.HandlerFunc{status(429, "120"), status(202, "")}, posts: 2, slept: []time.Duration{2 * time.Minute}},
 		"client error":         {handlers: []http.HandlerFunc{status(400, "")}, posts: 1, fails: true},
 	} {
 		t.Run(name, func(t *testing.T) {

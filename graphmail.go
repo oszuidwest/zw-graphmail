@@ -23,7 +23,6 @@ import (
 const (
 	graphURL    = "https://graph.microsoft.com/v1.0"
 	maxAttempts = 4
-	maxWait     = 30 * time.Second
 )
 
 // Config identifies the Entra app and the mailbox it sends from.
@@ -87,15 +86,15 @@ func newClient(cfg Config, tokenURL, baseURL string) (*Client, error) {
 }
 
 // Send delivers m. It makes up to four attempts on 429, 500, 502, 503, 504
-// and network errors, and gives up when Graph asks to wait longer than 30
-// seconds. A retry after a lost response can deliver the mail twice, so
-// this favours delivery over avoiding duplicates.
+// and network errors. It waits as long as Graph asks in Retry-After; use a
+// context deadline to limit that. A retry after a lost response can deliver
+// the mail twice, so this favours delivery over avoiding duplicates.
 func (c *Client) Send(ctx context.Context, m *Message) error {
 	payload, _ := json.Marshal(newMailRequest(m)) // only strings, maps and slices
 	endpoint := c.baseURL + "/users/" + url.PathEscape(c.cfg.From) + "/sendMail"
 	for attempt := 1; ; attempt++ {
 		retry, wait, err := c.post(ctx, endpoint, payload)
-		if !retry || attempt == maxAttempts || wait > maxWait {
+		if !retry || attempt == maxAttempts {
 			return err
 		}
 		if wait == 0 {
