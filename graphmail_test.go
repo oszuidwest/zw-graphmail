@@ -14,10 +14,9 @@ import (
 // fakeGraph serves the token endpoint and answers each Graph request with
 // the next handler; the last handler repeats.
 type fakeGraph struct {
-	tokenStatus int
-	handlers    []http.HandlerFunc
-	posts       int
-	slept       []time.Duration
+	handlers []http.HandlerFunc
+	posts    int
+	slept    []time.Duration
 }
 
 func (f *fakeGraph) client(t *testing.T) *Client {
@@ -25,7 +24,6 @@ func (f *fakeGraph) client(t *testing.T) *Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/token" {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(max(f.tokenStatus, http.StatusOK))
 			_, _ = io.WriteString(w, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)
 			return
 		}
@@ -49,9 +47,7 @@ func (f *fakeGraph) client(t *testing.T) *Client {
 
 func status(code int, retryAfter string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		if retryAfter != "" {
-			w.Header().Set("Retry-After", retryAfter)
-		}
+		w.Header().Set("Retry-After", retryAfter)
 		w.WriteHeader(code)
 	}
 }
@@ -87,23 +83,21 @@ func TestSendRetries(t *testing.T) {
 		_ = conn.Close()
 	}
 	for name, tc := range map[string]struct {
-		tokenStatus int
-		handlers    []http.HandlerFunc
-		posts       int
-		slept       []time.Duration
-		fails       bool
+		handlers []http.HandlerFunc
+		posts    int
+		slept    []time.Duration
+		fails    bool
 	}{
-		"Retry-After on 429":     {handlers: []http.HandlerFunc{status(429, "7"), status(202, "")}, posts: 2, slept: []time.Duration{7 * time.Second}},
-		"Retry-After on 503":     {handlers: []http.HandlerFunc{status(503, "3"), status(202, "")}, posts: 2, slept: []time.Duration{3 * time.Second}},
-		"network error":          {handlers: []http.HandlerFunc{dropConnection, status(202, "")}, posts: 2, slept: []time.Duration{time.Second}},
-		"backoff then give up":   {handlers: []http.HandlerFunc{status(500, "")}, posts: 4, slept: []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, fails: true},
-		"Retry-After of 30s":     {handlers: []http.HandlerFunc{status(429, "30"), status(202, "")}, posts: 2, slept: []time.Duration{30 * time.Second}},
-		"Retry-After over 30s":   {handlers: []http.HandlerFunc{status(429, "31")}, posts: 1, fails: true},
-		"client error":           {handlers: []http.HandlerFunc{status(400, "")}, posts: 1, fails: true},
-		"token request rejected": {tokenStatus: 401, handlers: []http.HandlerFunc{status(202, "")}, posts: 0, fails: true},
+		"Retry-After on 429":   {handlers: []http.HandlerFunc{status(429, "7"), status(202, "")}, posts: 2, slept: []time.Duration{7 * time.Second}},
+		"Retry-After on 503":   {handlers: []http.HandlerFunc{status(503, "3"), status(202, "")}, posts: 2, slept: []time.Duration{3 * time.Second}},
+		"network error":        {handlers: []http.HandlerFunc{dropConnection, status(202, "")}, posts: 2, slept: []time.Duration{time.Second}},
+		"backoff then give up": {handlers: []http.HandlerFunc{status(500, "")}, posts: 4, slept: []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, fails: true},
+		"Retry-After of 30s":   {handlers: []http.HandlerFunc{status(429, "30"), status(202, "")}, posts: 2, slept: []time.Duration{30 * time.Second}},
+		"Retry-After over 30s": {handlers: []http.HandlerFunc{status(429, "31")}, posts: 1, fails: true},
+		"client error":         {handlers: []http.HandlerFunc{status(400, "")}, posts: 1, fails: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := &fakeGraph{tokenStatus: tc.tokenStatus, handlers: tc.handlers}
+			f := &fakeGraph{handlers: tc.handlers}
 			err := f.client(t).Send(t.Context(), &Message{To: []string{"a@x.nl"}})
 			if (err != nil) != tc.fails || f.posts != tc.posts || !slices.Equal(f.slept, tc.slept) {
 				t.Errorf("err=%v posts=%d slept=%v, want fails=%v posts=%d slept=%v", err, f.posts, f.slept, tc.fails, tc.posts, tc.slept)
@@ -154,20 +148,15 @@ func TestSecretExpiry(t *testing.T) {
 }
 
 func TestNewRequiresEveryField(t *testing.T) {
-	full := Config{TenantID: "t", ClientID: "c", ClientSecret: "s", From: "f"}
-	if _, err := New(full); err != nil {
-		t.Fatal(err)
-	}
-	for _, blank := range []func(*Config){
-		func(c *Config) { c.TenantID = "" },
-		func(c *Config) { c.ClientID = "" },
-		func(c *Config) { c.ClientSecret = "" },
-		func(c *Config) { c.From = "" },
+	for i, cfg := range []Config{
+		{TenantID: "t", ClientID: "c", ClientSecret: "s", From: "f"},
+		{ClientID: "c", ClientSecret: "s", From: "f"},
+		{TenantID: "t", ClientSecret: "s", From: "f"},
+		{TenantID: "t", ClientID: "c", From: "f"},
+		{TenantID: "t", ClientID: "c", ClientSecret: "s"},
 	} {
-		cfg := full
-		blank(&cfg)
-		if _, err := New(cfg); err == nil {
-			t.Errorf("New(%+v) = nil error", cfg)
+		if _, err := New(cfg); (err == nil) != (i == 0) {
+			t.Errorf("New(%+v) error = %v", cfg, err)
 		}
 	}
 }

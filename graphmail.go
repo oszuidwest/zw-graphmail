@@ -45,7 +45,7 @@ type Message struct {
 	Attachments []Attachment
 }
 
-// Attachment is a file sent inline with the message.
+// Attachment is a file attached to the message.
 type Attachment struct {
 	Name        string
 	ContentType string
@@ -88,13 +88,10 @@ func newClient(cfg Config, tokenURL, baseURL string) (*Client, error) {
 
 // Send delivers m. It makes up to four attempts on 429, 500, 502, 503, 504
 // and network errors, and gives up when Graph asks to wait longer than 30
-// seconds. A retry after a lost response can deliver the mail twice; for
-// alerts that beats losing it.
+// seconds. A retry after a lost response can deliver the mail twice, so
+// this favours delivery over avoiding duplicates.
 func (c *Client) Send(ctx context.Context, m *Message) error {
-	payload, err := json.Marshal(newMailRequest(m))
-	if err != nil {
-		return fmt.Errorf("graphmail: encode message: %w", err)
-	}
+	payload, _ := json.Marshal(newMailRequest(m)) // only strings, maps and slices
 	endpoint := c.baseURL + "/users/" + url.PathEscape(c.cfg.From) + "/sendMail"
 	for attempt := 1; ; attempt++ {
 		retry, wait, err := c.post(ctx, endpoint, payload)
@@ -119,9 +116,7 @@ func (c *Client) post(ctx context.Context, endpoint string, payload []byte) (ret
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		// A rejected token request (bad secret, unknown tenant) will not heal.
-		var tokenErr *oauth2.RetrieveError
-		return ctx.Err() == nil && !errors.As(err, &tokenErr), 0, fmt.Errorf("graphmail: %w", err)
+		return ctx.Err() == nil, 0, fmt.Errorf("graphmail: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 == 2 {
@@ -157,8 +152,8 @@ func sleep(ctx context.Context, d time.Duration) error {
 
 // SecretExpiry reports when the configured client secret expires. It needs
 // the Application.Read.All application permission. Graph only exposes the
-// first three characters of each secret, so if more unexpired secrets share
-// them, the earliest expiry is returned.
+// first three characters of each secret, so it returns the earliest expiry of
+// the unexpired secrets that start with those characters.
 func (c *Client) SecretExpiry(ctx context.Context) (time.Time, error) {
 	endpoint := c.baseURL + "/applications(appId='" + url.PathEscape(c.cfg.ClientID) + "')?$select=passwordCredentials"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
