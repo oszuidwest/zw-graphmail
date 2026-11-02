@@ -3,6 +3,7 @@ package graphmail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -104,6 +105,17 @@ func TestSendRetries(t *testing.T) {
 				t.Errorf("err=%v posts=%d slept=%v, want fails=%v posts=%d slept=%v", err, f.posts, f.slept, tc.fails, tc.posts, tc.slept)
 			}
 		})
+	}
+}
+
+func TestSendCancelledDuringWait(t *testing.T) {
+	f := &fakeGraph{handlers: []http.HandlerFunc{status(429, "5")}}
+	c := f.client(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	c.sleep = func(ctx context.Context, d time.Duration) error { cancel(); return sleep(ctx, d) }
+	start := time.Now()
+	if err := c.Send(ctx, &Message{To: []string{"a@x.nl"}}); !errors.Is(err, context.Canceled) || time.Since(start) > 2*time.Second {
+		t.Errorf("err=%v after %v, want context.Canceled without waiting 5s", err, time.Since(start))
 	}
 }
 
