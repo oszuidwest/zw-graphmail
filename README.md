@@ -25,7 +25,7 @@ err = mail.Send(ctx, &graphmail.Message{
 })
 ```
 
-Set `HTML: true` for an HTML body. `Attachments` takes files as bytes.
+Set `HTML: true` for an HTML body. `Attachments` takes files as bytes. Graph only takes attachments under 3 MB this way, and the whole request must stay under 4 MB. Larger files need an upload session, which this package does not do.
 
 `SecretExpiry` returns when the configured client secret expires, so a service can warn before mail stops working. Graph only lets it match the secret on its first three characters; see below.
 
