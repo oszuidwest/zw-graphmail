@@ -1,0 +1,31 @@
+version: "2"
+
+linters:
+  enable:
+    # Existing
+    - gocritic
+    - gocyclo
+    # Doc/Comment
+    - godot
+    - godoclint
+    - dupword
+    - misspell
+    # Code quality
+    - errorlint
+    - gosec
+    - modernize
+    - nilerr
+    - nolintlint
+    - unparam
+    - unconvert
+    - bodyclose
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+    gocyclo:
+      min-complexity: 20
+    godot:
+      scope: toplevel

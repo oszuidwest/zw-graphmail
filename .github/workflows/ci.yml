@@ -1,0 +1,22 @@
+---
+name: CI
+
+on:
+  push:
+    branches: ['main']
+    paths: &ci_paths
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.golangci.yml'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: ['main']
+    paths: *ci_paths
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: oszuidwest/.github-templates/.github/workflows/go-ci.yml@v3
