@@ -90,6 +90,10 @@ func newClient(cfg Config, tokenURL, baseURL string) (*Client, error) {
 // context deadline to limit that. A retry after a lost response can deliver
 // the mail twice, so this favours delivery over avoiding duplicates.
 func (c *Client) Send(ctx context.Context, m *Message) error {
+	// The token request does not follow ctx, so stop before it starts.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("graphmail: %w", err)
+	}
 	payload, _ := json.Marshal(newMailRequest(m)) // only strings, maps and slices
 	endpoint := c.baseURL + "/users/" + url.PathEscape(c.cfg.From) + "/sendMail"
 	for attempt := 1; ; attempt++ {

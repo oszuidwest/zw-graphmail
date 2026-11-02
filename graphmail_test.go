@@ -15,6 +15,7 @@ import (
 // the next handler; the last handler repeats.
 type fakeGraph struct {
 	handlers []http.HandlerFunc
+	tokens   int
 	posts    int
 	slept    []time.Duration
 }
@@ -23,6 +24,7 @@ func (f *fakeGraph) client(t *testing.T) *Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/token" {
+			f.tokens++
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)
 			return
@@ -109,8 +111,8 @@ func TestSendCancelled(t *testing.T) {
 	f := &fakeGraph{handlers: []http.HandlerFunc{status(202, "")}}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := f.client(t).Send(ctx, &Message{To: []string{"a@x.nl"}}); err == nil || f.posts != 0 || len(f.slept) != 0 {
-		t.Errorf("err=%v posts=%d slept=%v, want an error without attempts", err, f.posts, f.slept)
+	if err := f.client(t).Send(ctx, &Message{To: []string{"a@x.nl"}}); err == nil || f.tokens+f.posts != 0 || len(f.slept) != 0 {
+		t.Errorf("err=%v tokens=%d posts=%d slept=%v, want an error without requests", err, f.tokens, f.posts, f.slept)
 	}
 }
 
