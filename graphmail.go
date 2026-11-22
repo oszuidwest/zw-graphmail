@@ -55,6 +55,9 @@ type Attachment struct {
 type Client struct {
 	cfg     Config
 	http    *http.Client
+	creds   clientcredentials.Config
+	lock    chan struct{} // guards tok; a channel so waiting follows ctx
+	tok     *oauth2.Token
 	baseURL string
 	sleep   func(context.Context, time.Duration) error
 }
@@ -77,13 +80,43 @@ func newClient(cfg Config, tokenURL, baseURL string) (*Client, error) {
 		AuthStyle:    oauth2.AuthStyleInParams,
 		Scopes:       []string{"https://graph.microsoft.com/.default"},
 	}
-	base := &http.Client{Timeout: 30 * time.Second}
 	return &Client{
 		cfg:     cfg,
-		http:    creds.Client(context.WithValue(context.Background(), oauth2.HTTPClient, base)),
+		http:    &http.Client{Timeout: 30 * time.Second},
+		creds:   creds,
+		lock:    make(chan struct{}, 1),
 		baseURL: baseURL,
 		sleep:   sleep,
 	}, nil
+}
+
+// do sends req with an access token. The token is cached. Waiting for it and
+// fetching a new one follow the context of req.
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	tok, err := c.token(req.Context())
+	if err != nil {
+		return nil, err
+	}
+	tok.SetAuthHeader(req)
+	return c.http.Do(req)
+}
+
+func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
+	select {
+	case c.lock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-c.lock }()
+	if c.tok.Valid() {
+		return c.tok, nil
+	}
+	tok, err := c.creds.Token(context.WithValue(ctx, oauth2.HTTPClient, c.http))
+	if err != nil {
+		return nil, fmt.Errorf("token request: %w", err)
+	}
+	c.tok = tok
+	return tok, nil
 }
 
 // Send delivers m. It makes up to four attempts on 429, 500, 502, 503, 504
@@ -91,7 +124,6 @@ func newClient(cfg Config, tokenURL, baseURL string) (*Client, error) {
 // context deadline to limit that. A retry after a lost response can deliver
 // the mail twice, so this favours delivery over avoiding duplicates.
 func (c *Client) Send(ctx context.Context, m *Message) error {
-	// The token request does not follow ctx, so stop before it starts.
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("graphmail: %w", err)
 	}
@@ -121,7 +153,7 @@ func (c *Client) post(ctx context.Context, endpoint string, payload []byte) (ret
 		return false, 0, fmt.Errorf("graphmail: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return ctx.Err() == nil, 0, fmt.Errorf("graphmail: %w", err)
 	}
@@ -167,7 +199,7 @@ func (c *Client) SecretExpiry(ctx context.Context) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("graphmail: %w", err)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("graphmail: %w", err)
 	}

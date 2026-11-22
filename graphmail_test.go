@@ -15,10 +15,11 @@ import (
 // fakeGraph serves the token endpoint and answers each Graph request with
 // the next handler; the last handler repeats.
 type fakeGraph struct {
-	handlers []http.HandlerFunc
-	tokens   int
-	posts    int
-	slept    []time.Duration
+	handlers   []http.HandlerFunc
+	failTokens int // answer this many token requests with 503
+	tokens     int
+	posts      int
+	slept      []time.Duration
 }
 
 func (f *fakeGraph) client(t *testing.T) *Client {
@@ -26,6 +27,10 @@ func (f *fakeGraph) client(t *testing.T) *Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/token" {
 			f.tokens++
+			if f.tokens <= f.failTokens {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)
 			return
@@ -86,10 +91,11 @@ func TestSendRetries(t *testing.T) {
 		_ = conn.Close()
 	}
 	for name, tc := range map[string]struct {
-		handlers []http.HandlerFunc
-		posts    int
-		slept    []time.Duration
-		fails    bool
+		handlers   []http.HandlerFunc
+		failTokens int
+		posts      int
+		slept      []time.Duration
+		fails      bool
 	}{
 		"Retry-After on 429":   {handlers: []http.HandlerFunc{status(429, "7"), status(202, "")}, posts: 2, slept: []time.Duration{7 * time.Second}},
 		"Retry-After on 503":   {handlers: []http.HandlerFunc{status(503, "3"), status(202, "")}, posts: 2, slept: []time.Duration{3 * time.Second}},
@@ -97,12 +103,14 @@ func TestSendRetries(t *testing.T) {
 		"backoff then give up": {handlers: []http.HandlerFunc{status(500, "")}, posts: 4, slept: []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, fails: true},
 		"long Retry-After":     {handlers: []http.HandlerFunc{status(429, "120"), status(202, "")}, posts: 2, slept: []time.Duration{2 * time.Minute}},
 		"client error":         {handlers: []http.HandlerFunc{status(400, "")}, posts: 1, fails: true},
+		"token request 503":    {handlers: []http.HandlerFunc{status(202, "")}, failTokens: 1, posts: 1, slept: []time.Duration{time.Second}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := &fakeGraph{handlers: tc.handlers}
+			f := &fakeGraph{handlers: tc.handlers, failTokens: tc.failTokens}
 			err := f.client(t).Send(t.Context(), &Message{To: []string{"a@x.nl"}})
-			if (err != nil) != tc.fails || f.posts != tc.posts || !slices.Equal(f.slept, tc.slept) {
-				t.Errorf("err=%v posts=%d slept=%v, want fails=%v posts=%d slept=%v", err, f.posts, f.slept, tc.fails, tc.posts, tc.slept)
+			tokens := 1 + tc.failTokens // one token serves every attempt
+			if (err != nil) != tc.fails || f.tokens != tokens || f.posts != tc.posts || !slices.Equal(f.slept, tc.slept) {
+				t.Errorf("err=%v tokens=%d posts=%d slept=%v, want fails=%v tokens=%d posts=%d slept=%v", err, f.tokens, f.posts, f.slept, tc.fails, tokens, tc.posts, tc.slept)
 			}
 		})
 	}
@@ -116,6 +124,46 @@ func TestSendCancelledDuringWait(t *testing.T) {
 	start := time.Now()
 	if err := c.Send(ctx, &Message{To: []string{"a@x.nl"}}); !errors.Is(err, context.Canceled) || time.Since(start) > 10*time.Second {
 		t.Errorf("err=%v after %v, want context.Canceled without waiting 30s", err, time.Since(start))
+	}
+}
+
+func TestSendRenewsTokenExpiredDuringWait(t *testing.T) {
+	f := &fakeGraph{handlers: []http.HandlerFunc{status(503, "3"), status(202, "")}}
+	c := f.client(t)
+	c.sleep = func(context.Context, time.Duration) error {
+		c.tok.Expiry = time.Now()
+		return nil
+	}
+	if err := c.Send(t.Context(), &Message{To: []string{"a@x.nl"}}); err != nil || f.tokens != 2 {
+		t.Errorf("err=%v tokens=%d, want a new token for the retry", err, f.tokens)
+	}
+}
+
+func TestSendCancelledWhileWaitingForToken(t *testing.T) {
+	f := &fakeGraph{handlers: []http.HandlerFunc{status(202, "")}}
+	c := f.client(t)
+	c.lock <- struct{}{} // another call is fetching a token
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if err := c.Send(ctx, &Message{To: []string{"a@x.nl"}}); !errors.Is(err, context.DeadlineExceeded) || f.tokens+f.posts != 0 {
+		t.Errorf("err=%v tokens=%d posts=%d, want context.DeadlineExceeded without requests", err, f.tokens, f.posts)
+	}
+}
+
+func TestSendCancelledDuringTokenFetch(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body) // the server notices a closed connection only after the body is read
+		cancel()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	c, err := newClient(Config{TenantID: "t", ClientID: "app", ClientSecret: "abc~secret", From: "noreply@zuidwest.nl"}, srv.URL+"/token", srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Send(ctx, &Message{To: []string{"a@x.nl"}}); !errors.Is(err, context.Canceled) {
+		t.Errorf("err=%v, want context.Canceled", err)
 	}
 }
 
